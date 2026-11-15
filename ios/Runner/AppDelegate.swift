@@ -11,6 +11,25 @@ import WidgetKit
     // https://music.apple.com/cn/album/morning-dew/1686069386?i=1686069387
     func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
         GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+        let controller = window?.rootViewController as! FlutterViewController
+let shareChannel = FlutterMethodChannel(name: "pixez/ios_share", binaryMessenger: controller.binaryMessenger)
+shareChannel.setMethodCallHandler { call, result in
+    guard call.method == "shareFile",
+          let args = call.arguments as? [String: Any],
+          let path = args["path"] as? String else {
+        result(FlutterError(code: "INVALID", message: "Missing path", details: nil))
+        return
+    }
+    let fileURL = URL(fileURLWithPath: path)
+    let vc = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+    if let popover = vc.popoverPresentationController {
+        popover.sourceView = controller.view
+        popover.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 0, height: 0)
+        popover.permittedArrowDirections = []
+    }
+    controller.present(vc, animated: true)
+    result(true)
+}
         let batteryChannel = FlutterMethodChannel(name: "samples.flutter.dev/battery",
                                                   binaryMessenger: engineBridge.applicationRegistrar.messenger())
         batteryChannel.setMethodCallHandler({
