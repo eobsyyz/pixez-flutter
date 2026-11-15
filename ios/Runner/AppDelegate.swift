@@ -47,21 +47,51 @@ import WidgetKit
 
         let batteryChannel = FlutterMethodChannel(name: "samples.flutter.dev/battery",
                                                 binaryMessenger: engineBridge.applicationRegistrar.messenger())
-        batteryChannel.setMethodCallHandler({
-            (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
-            guard call.method == "getBatteryLevel" else {
-                result(FlutterMethodNotImplemented)
+        shareChannel.setMethodCallHandler { [weak self] call, result in
+            if call.method == "openEoReader",
+               let args = call.arguments as? [String: Any],
+               let port = args["port"] as? Int,
+               let targetURL = URL(string: "eoreader://pull?port=\(port)") {
+                var bgTask: UIBackgroundTaskIdentifier = .invalid
+                bgTask = UIApplication.shared.beginBackgroundTask {
+                    UIApplication.shared.endBackgroundTask(bgTask)
+                    bgTask = .invalid
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+                    if bgTask != .invalid {
+                        UIApplication.shared.endBackgroundTask(bgTask)
+                        bgTask = .invalid
+                    }
+                }
+                DispatchQueue.main.async {
+                    UIApplication.shared.open(targetURL, options: [:]) { ok in
+                        result(ok)
+                    }
+                }
                 return
             }
-            let args = call.arguments as? [String:Any]
-            let path : String = args?["path"] as! String
-            let delay:Int = args?["delay"] as! Int
-            self.receiveBatteryLevel(result: result,path: path ,delay: delay)
-        })
-        DocumentPlugin.bind(engineBridge)
-        DeepLinkPlugin.register(with: engineBridge.pluginRegistry.registrar(forPlugin: "DeepLinkPlugin")!)
-        bindAppWidgetChannel(engineBridge)
-    }
+            guard call.method == "shareFile",
+                  let args = call.arguments as? [String: Any],
+                  let path = args["path"] as? String else {
+                result(FlutterError(code: "INVALID", message: "Missing path", details: nil))
+                return
+            }
+            DispatchQueue.main.async {
+                guard let presenter = self?.visibleViewController() else {
+                    result(FlutterError(code: "NO_VC", message: "No view controller", details: nil))
+                    return
+                }
+                let fileURL = URL(fileURLWithPath: path)
+                let vc = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+                if let popover = vc.popoverPresentationController {
+                    popover.sourceView = presenter.view
+                    popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
+                    popover.permittedArrowDirections = []
+                }
+                presenter.present(vc, animated: true)
+                result(true)
+            }
+        }
 
     private func bindAppWidgetChannel(_ engineBridge: FlutterImplicitEngineBridge) {
         let appWidgetChannel = FlutterMethodChannel(name: "com.perol.dev/app_widget",
