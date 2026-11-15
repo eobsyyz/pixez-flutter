@@ -123,6 +123,9 @@ abstract class _SaveStoreBase with Store {
   }
 
   void listenBehavior(SaveStream stream) {
+    if (Platform.isIOS && ctx != null) {
+      EoVaultHelper.ensureFloatingButton(ctx!);
+    }
     switch (stream.state) {
       case SaveState.SUCCESS:
         Toaster.downloadOk(
