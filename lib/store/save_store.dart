@@ -15,7 +15,6 @@
  */
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -33,7 +32,7 @@ import 'package:pixez/main.dart';
 import 'package:pixez/models/illust.dart';
 import 'package:pixez/models/task_persist.dart';
 import 'package:pixez/page/task/job_page.dart';
-import 'package:flutter/services.dart';
+import 'package:pixez/store/eo_vault_helper.dart';
 
 part 'save_store.g.dart';
 
@@ -69,6 +68,9 @@ class JobEntity {
   int? status;
 }
 
+/// 根据用户设置的格式模板或 JS 脚本生成文件名。
+/// [memType] 须包含前导点，如 ".jpg"、".png"、".gif"、".zip"。
+/// [withExtension] 默认为 true，返回带扩展名的文件名；设为 false 则不带扩展名。
 Future<String> buildSaveFileName(
   Illusts illust,
   int index,
@@ -100,23 +102,21 @@ Future<String> buildSaveFileName(
   return result.toLegal();
 }
 
+/// 如果用户启用了 [singleFolder]，将 [baseName] 包装到作者子目录中。
 String applySingleFolder(Illusts illust, String baseName) {
   if (userSetting.singleFolder) {
     return "${illust.user.name.toLegal()}_${illust.user.id}/$baseName";
   }
   return baseName;
 }
-final Map<int, List>> _iosVaultBuffer = {};
-  final Map<int, int> _iosExpectedCounts = {};
+
 class SaveStore = _SaveStoreBase with _$SaveStore;
 
+abstract class _SaveStoreBase with Store {
   _SaveStoreBase() {
     streamController = StreamController();
     saveStream = ObservableStream(streamController.stream.asBroadcastStream());
   }
-
-  final Map<int, List>> _iosVaultBuffer = {};
-  final Map<int, int> _iosExpectedCounts = {};
 
   void dispose() async {
     await streamController.close();
@@ -369,34 +369,9 @@ class SaveStore = _SaveStoreBase with _$SaveStore;
     String fileName,
   ) async {
     if (Platform.isIOS) {
-      final list = _iosVaultBuffer.putIfAbsent(illusts.id, () => []);
-      list.add({
-        "name": fileName,
-        "data": base64Encode(uint8list),
-      });
-      final expected = _iosExpectedCounts[illusts.id] ?? illusts.pageCount;
-      if (list.length >= expected) {
-        final pages = List>.from(list);
-        _iosVaultBuffer.remove(illusts.id);
-        _iosExpectedCounts.remove(illusts.id);
-
-        final String category =
-            (illusts.type == "manga" || illusts.pageCount > 1) ? "漫画" : "插画";
-        final String title = "${illusts.title.toLegal()}_${illusts.id}";
-        final payload = {
-          "category": category,
-          "title": title,
-          "pages": pages,
-        };
-
-        final tempFile = File('${Directory.systemTemp.path}/${illusts.id}.eovault');
-        await tempFile.writeAsString(jsonEncode(payload));
-        const channel = MethodChannel('pixez/ios_share');
-        await channel.invokeMethod('shareFile', {'path': tempFile.path});
-      }
+      await EoVaultHelper.handleSave(uint8list, illusts, fileName);
       return;
     }
-
     saveToGalleryWithUser(
       uint8list,
       illusts.user.name,
@@ -413,8 +388,7 @@ class SaveStore = _SaveStoreBase with _$SaveStore;
     } else {
       final selectedCount = indexs.where((e) => e).length;
       if (Platform.isIOS && selectedCount > 0) {
-        _iosVaultBuffer.remove(illusts.id);
-        _iosExpectedCounts[illusts.id] = selectedCount;
+        EoVaultHelper.prepareExpected(illusts, customCount: selectedCount);
       }
       for (var i = 0; i < indexs.length; i++) {
         if (indexs[i]) {
@@ -473,12 +447,7 @@ class SaveStore = _SaveStoreBase with _$SaveStore;
     bool redo = false,
   }) async {
     if (Platform.isIOS) {
-      _iosVaultBuffer.putIfAbsent(illusts.id, () => []);
-      if (illusts.pageCount == 1 || index != null) {
-        _iosExpectedCounts.putIfAbsent(illusts.id, () => 1);
-      } else {
-        _iosExpectedCounts[illusts.id] = illusts.pageCount;
-      }
+      EoVaultHelper.prepareExpected(illusts, singleIndex: index);
     }
     String memType;
     if (illusts.pageCount == 1) {
