@@ -11,27 +11,42 @@ import WidgetKit
     // https://music.apple.com/cn/album/morning-dew/1686069386?i=1686069387
     func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
         GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-        let controller = window?.rootViewController as! FlutterViewController
-let shareChannel = FlutterMethodChannel(name: "pixez/ios_share", binaryMessenger: controller.binaryMessenger)
-shareChannel.setMethodCallHandler { call, result in
-    guard call.method == "shareFile",
-          let args = call.arguments as? [String: Any],
-          let path = args["path"] as? String else {
-        result(FlutterError(code: "INVALID", message: "Missing path", details: nil))
-        return
-    }
-    let fileURL = URL(fileURLWithPath: path)
-    let vc = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
-    if let popover = vc.popoverPresentationController {
-        popover.sourceView = controller.view
-        popover.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 0, height: 0)
-        popover.permittedArrowDirections = []
-    }
-    controller.present(vc, animated: true)
-    result(true)
-}
+
+        let shareChannel = FlutterMethodChannel(
+            name: "pixez/ios_share",
+            binaryMessenger: engineBridge.applicationRegistrar.messenger()
+        )
+        shareChannel.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "shareFile",
+                  let args = call.arguments as? [String: Any],
+                  let path = args["path"] as? String else {
+                result(FlutterError(code: "INVALID", message: "Missing path", details: nil))
+                return
+            }
+            DispatchQueue.main.async {
+                guard let presenter = self?.visibleViewController() else {
+                    result(FlutterError(code: "NO_VC", message: "No view controller", details: nil))
+                    return
+                }
+                let fileURL = URL(fileURLWithPath: path)
+                let vc = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+                if let popover = vc.popoverPresentationController {
+                    popover.sourceView = presenter.view
+                    popover.sourceRect = CGRect(
+                        x: presenter.view.bounds.midX,
+                        y: presenter.view.bounds.midY,
+                        width: 0,
+                        height: 0
+                    )
+                    popover.permittedArrowDirections = []
+                }
+                presenter.present(vc, animated: true)
+                result(true)
+            }
+        }
+
         let batteryChannel = FlutterMethodChannel(name: "samples.flutter.dev/battery",
-                                                  binaryMessenger: engineBridge.applicationRegistrar.messenger())
+                                                binaryMessenger: engineBridge.applicationRegistrar.messenger())
         batteryChannel.setMethodCallHandler({
             (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
             guard call.method == "getBatteryLevel" else {
@@ -39,12 +54,9 @@ shareChannel.setMethodCallHandler { call, result in
                 return
             }
             let args = call.arguments as? [String:Any]
-            
-            
             let path : String = args?["path"] as! String
             let delay:Int = args?["delay"] as! Int
             self.receiveBatteryLevel(result: result,path: path ,delay: delay)
-            
         })
         DocumentPlugin.bind(engineBridge)
         DeepLinkPlugin.register(with: engineBridge.pluginRegistry.registrar(forPlugin: "DeepLinkPlugin")!)
@@ -92,26 +104,20 @@ shareChannel.setMethodCallHandler { call, result in
     
     func getAllFilePath(_ dirPath: String) -> [String]? {
         var filePaths = [String]()
-        
         do {
             let array = try FileManager.default.contentsOfDirectory(atPath: dirPath)
-            
             for fileName in array {
                 var isDir: ObjCBool = true
-                
                 let fullPath = "\(dirPath)/\(fileName)"
-                
                 if FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir) {
                     if !isDir.boolValue {
                         filePaths.append(fullPath)
                     }
                 }
             }
-            
         } catch let error as NSError {
             print("get file path error: \(error)")
         }
-        
         return filePaths;
     }
     
@@ -144,14 +150,11 @@ shareChannel.setMethodCallHandler { call, result in
         }
         PHPhotoLibrary.shared().performChanges({
             let url = URL(fileURLWithPath: gifPath)
-            let result =   PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
-            
-            
+            let result = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
             if !albumName.isEmpty {
-                let assetPlaceholder =   result?.placeholderForCreatedAsset
-                let albumChangeRequset = PHAssetCollectionChangeRequest(for:
-                                                                            assetAlbum!)
-                albumChangeRequset!.addAssets([assetPlaceholder!]  as NSArray)
+                let assetPlaceholder = result?.placeholderForCreatedAsset
+                let albumChangeRequset = PHAssetCollectionChangeRequest(for: assetAlbum!)
+                albumChangeRequset!.addAssets([assetPlaceholder!] as NSArray)
             }
         }) { (isSuccess: Bool, error: Error?) in
             if isSuccess {
@@ -165,16 +168,15 @@ shareChannel.setMethodCallHandler { call, result in
                 print("Your image was successfully saved")
             } else{
                 print(error!.localizedDescription)
-                
             }
         }
     }
     
     private func receiveBatteryLevel(result: FlutterResult,path:String,delay:Int) {
         let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)
-        let gifPath =  docs[0] as String + "/"+String(Int(Date.init().timeIntervalSince1970)) + ".gif"
+        let gifPath = docs[0] as String + "/"+String(Int(Date.init().timeIntervalSince1970)) + ".gif"
         var paths = getAllFilePath(path)
-        paths =  paths?.sorted{$0.localizedStandardCompare($1) == .orderedAscending}
+        paths = paths?.sorted{$0.localizedStandardCompare($1) == .orderedAscending}
         let imageArray: NSMutableArray = NSMutableArray()
         for i in paths! {
             print(i)
@@ -182,12 +184,10 @@ shareChannel.setMethodCallHandler { call, result in
             if image != nil {
                 imageArray.add(image!)
             }
-            
         }
         let ok = saveGifToDocument(imageArray: imageArray, gifPath,delay: delay)
         if(ok){
             saveImageInAlbum(albumName: "pxez", gifPath: gifPath)
-            
         }
         result(Int(1))
     }
@@ -197,15 +197,14 @@ shareChannel.setMethodCallHandler { call, result in
                 gifPath.utf8CString.count > 0 else {
             return false
         }
-        
         let url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, gifPath as CFString, .cfurlposixPathStyle, false)
         let destion = CGImageDestinationCreateWithURL(url!, kUTTypeGIF, images.count, nil)
         let adelay = Float(delay)/Float(1000)
         print("delay time\(adelay)")
         let delayTime = [kCGImagePropertyGIFUnclampedDelayTime as String:adelay]
-        let destDic   = [kCGImagePropertyGIFDictionary as String:delayTime]
+        let destDic = [kCGImagePropertyGIFDictionary as String:delayTime]
         let gifPropertiesDic:NSMutableDictionary = NSMutableDictionary()
-        gifPropertiesDic.setValue(0, forKey: kCGImagePropertyGIFLoopCount as String)//
+        gifPropertiesDic.setValue(0, forKey: kCGImagePropertyGIFLoopCount as String)
         let gifDictionaryDestDic = [kCGImagePropertyGIFDictionary as String:gifPropertiesDic]
         CGImageDestinationSetProperties(destion!,gifDictionaryDestDic as CFDictionary?);
         for image in images {
