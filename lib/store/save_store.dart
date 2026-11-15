@@ -106,10 +106,10 @@ String applySingleFolder(Illusts illust, String baseName) {
   }
   return baseName;
 }
-
+final Map<int, List>> _iosVaultBuffer = {};
+  final Map<int, int> _iosExpectedCounts = {};
 class SaveStore = _SaveStoreBase with _$SaveStore;
 
-abstract class _SaveStoreBase with Store {
   _SaveStoreBase() {
     streamController = StreamController();
     saveStream = ObservableStream(streamController.stream.asBroadcastStream());
