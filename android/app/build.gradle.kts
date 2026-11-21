@@ -152,6 +152,7 @@ flutter {
 }
 
 dependencies {
+    implementation "androidx.webkit:webkit:1.11.0"
     implementation(project(":androidndkgif"))
     implementation("androidx.core:core-remoteviews:1.1.0")
     implementation("androidx.annotation:annotation:1.9.1")
