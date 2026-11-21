@@ -55,6 +55,22 @@ jobs:
           hoster_file.write_text(code, encoding="utf-8")
           print(f"Injected -> API/Login/OAuth: {pixiv_ip}, CDN: {pximg_ip}")
           EOF
+       - name: Generate In-App Login Cert
+         run: |
+          mkdir -p lib/net
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/cealer.key -out /tmp/cealer.crt -days 800 \
+            -subj "/CN=*.pixiv.net" \
+            -addext "subjectAltName=DNS:*.pixiv.net,DNS:pixiv.net,DNS:*.pximg.net,DNS:pximg.net,DNS:*.fanbox.cc"
+          python3 - << 'EOF'
+          from pathlib import Path
+          cert = Path("/tmp/cealer.crt").read_text()
+          key = Path("/tmp/cealer.key").read_text()
+          Path("lib/net/cealer_certs.dart").write_text(
+              f"const String cealerCertPem = '''\n{cert}''';\n"
+              f"const String cealerKeyPem = '''\n{key}''';\n"
+          )
+          EOF
       - name: Sync Latest IPs from SpaceTimee/Cealing-Host
         run: |
           python3 - << 'EOF'
