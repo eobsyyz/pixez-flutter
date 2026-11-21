@@ -1,55 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
-import 'package:pixez/er/hoster.dart';
-import 'package:pixez/net/cealer_certs.dart';
 
 class CealerLoginProxy {
   static ServerSocket? _server;
-  static ServerSocket? _pixivRelay;
-  static ServerSocket? _pximgRelay;
   static int _port = 0;
 
-  static bool _isIp(String s) => RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(s);
-
-  static String _pixivIp() {
-    final v = Hoster.api();
-    return _isIp(v) ? v : '210.140.139.155';
-  }
-
-  static String _pximgIp() {
-    final v = Hoster.iPximgNet();
-    return _isIp(v) ? v : '210.140.139.133';
-  }
-
-  static Future<ServerSocket> _startTlsRelay(SecurityContext ctx, String targetIp) async {
-    final relay = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    relay.listen((Socket untouchedClient) async {
-      try {
-        final tlsClient = await SecureSocket.secureServer(untouchedClient, ctx);
-        final rawUp = await Socket.connect(targetIp, 443, timeout: Duration(seconds: 10));
-        final tlsUp = await SecureSocket.secure(rawUp, onBadCertificate: (_) => true);
-        _pipe(tlsClient, tlsUp);
-        _pipe(tlsUp, tlsClient);
-      } catch (_) {
-        try {
-          untouchedClient.destroy();
-        } catch (_) {}
-      }
-    });
-    return relay;
-  }
+  // Pixiv Cloudflare 边缘节点 (accounts.pixiv.net / app-api.pixiv.net / www.pixiv.net)
+  static const String _cfPixivIp = '104.18.42.239';
+  static const String _pximgIp = '210.140.139.133';
 
   static Future<int> start() async {
     if (_server != null) return _port;
-    final ctx = SecurityContext()
-      ..useCertificateChainBytes(utf8.encode(cealerCertPem))
-      ..usePrivateKeyBytes(utf8.encode(cealerKeyPem));
-
-    _pixivRelay = await _startTlsRelay(ctx, _pixivIp());
-    _pximgRelay = await _startTlsRelay(ctx, _pximgIp());
-
     _server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     _port = _server!.port;
     _server!.listen((Socket client) {
@@ -60,12 +24,42 @@ class CealerLoginProxy {
 
   static Future<void> stop() async {
     await _server?.close();
-    await _pixivRelay?.close();
-    await _pximgRelay?.close();
     _server = null;
-    _pixivRelay = null;
-    _pximgRelay = null;
     _port = 0;
+  }
+
+  static Future<void> _sendFragmentedClientHello(Socket upstream, List<int> data) async {
+    // 识别 TLS Handshake (0x16) 记录，按 20 字节进行 TLS 记录层分片绕过 SNI 嗅探
+    if (data.length > 25 && data[0] == 0x16 && data[1] == 0x03) {
+      final recLen = (data[3] << 8) | data[4];
+      if (data.length >= 5 + recLen && recLen > 20) {
+        final payload = data.sublist(5, 5 + recLen);
+        final tail = data.sublist(5 + recLen);
+        const chunkSize = 20;
+        for (int offset = 0; offset < payload.length; offset += chunkSize) {
+          final end = min(offset + chunkSize, payload.length);
+          final slice = payload.sublist(offset, end);
+          final record = <int>[
+            0x16,
+            0x03,
+            0x01,
+            (slice.length >> 8) & 0xff,
+            slice.length & 0xff,
+            ...slice,
+          ];
+          upstream.add(record);
+          await upstream.flush();
+          await Future.delayed(Duration(milliseconds: 5));
+        }
+        if (tail.isNotEmpty) {
+          upstream.add(tail);
+          await upstream.flush();
+        }
+        return;
+      }
+    }
+    upstream.add(data);
+    await upstream.flush();
   }
 
   static Future<void> _handleClient(Socket client) async {
@@ -107,25 +101,42 @@ class CealerLoginProxy {
       final host = targetParts[0].toLowerCase();
       final port = targetParts.length > 1 ? int.tryParse(targetParts[1]) ?? 443 : 443;
 
-      final Socket upstream;
+      bool needFragment = false;
+      String connectHost = host;
       if (host == 'pixiv.net' || host.endsWith('.pixiv.net') || host.endsWith('.fanbox.cc')) {
-        upstream = await Socket.connect(InternetAddress.loopbackIPv4, _pixivRelay!.port);
+        connectHost = _cfPixivIp;
+        needFragment = true;
       } else if (host == 'pximg.net' || host.endsWith('.pximg.net')) {
-        upstream = await Socket.connect(InternetAddress.loopbackIPv4, _pximgRelay!.port);
-      } else {
-        upstream = await Socket.connect(host, port, timeout: Duration(seconds: 10));
+        connectHost = _pximgIp;
+        needFragment = true;
       }
+
+      final upstream = await Socket.connect(connectHost, port, timeout: Duration(seconds: 10));
+      upstream.setOption(SocketOption.tcpNoDelay, true);
 
       client.add(ascii.encode('HTTP/1.1 200 Connection Established\r\n\r\n'));
       await client.flush();
 
+      bool firstPacketSent = false;
       if (remaining.isNotEmpty) {
-        upstream.add(remaining);
+        firstPacketSent = true;
+        if (needFragment) {
+          await _sendFragmentedClientHello(upstream, remaining);
+        } else {
+          upstream.add(remaining);
+        }
       }
 
-      sub.onData((data) {
+      sub.onData((data) async {
         try {
-          upstream.add(data);
+          if (!firstPacketSent && needFragment) {
+            firstPacketSent = true;
+            sub.pause();
+            await _sendFragmentedClientHello(upstream, data);
+            sub.resume();
+          } else {
+            upstream.add(data);
+          }
         } catch (_) {}
       });
       sub.onDone(() {
@@ -139,33 +150,30 @@ class CealerLoginProxy {
         } catch (_) {}
       });
       sub.resume();
-      _pipe(upstream, client);
+
+      upstream.listen(
+        (data) {
+          try {
+            client.add(data);
+          } catch (_) {}
+        },
+        onDone: () {
+          try {
+            client.destroy();
+          } catch (_) {}
+        },
+        onError: (_) {
+          try {
+            client.destroy();
+          } catch (_) {}
+        },
+        cancelOnError: true,
+      );
     } catch (_) {
       try {
         client.destroy();
       } catch (_) {}
     }
-  }
-
-  static void _pipe(Socket src, Socket dst) {
-    src.listen(
-      (data) {
-        try {
-          dst.add(data);
-        } catch (_) {}
-      },
-      onDone: () {
-        try {
-          dst.destroy();
-        } catch (_) {}
-      },
-      onError: (_) {
-        try {
-          dst.destroy();
-        } catch (_) {}
-      },
-      cancelOnError: true,
-    );
   }
 
   /// 一键呼出内置免翻登录/注册窗口，返回 pixiv://account/login?code=... 回调链接
