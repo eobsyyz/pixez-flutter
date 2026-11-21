@@ -99,14 +99,13 @@ jobs:
       - name: Generate app model files
         run: dart run build_runner build
 
-      - name: Build Android APK
+      - name: Build & Sign Android APK
         run: |
-          if flutter build apk --release --target-platform android-arm64; then
-            cp build/app/outputs/flutter-apk/app-release.apk pixez-cealer-android.apk
-          else
-            flutter build apk --debug --target-platform android-arm64
-            cp build/app/outputs/flutter-apk/app-debug.apk pixez-cealer-android.apk
-          fi
+          flutter build apk --release --target-platform android-arm64
+          keytool -genkey -v -keystore /tmp/release.jks -alias pixez -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=PixEz,O=Private,C=CN"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME/build-tools"/* | sort -V | tail -n 1)
+          "$BUILD_TOOLS/zipalign" -f -p 4 build/app/outputs/flutter-apk/app-release.apk /tmp/aligned.apk
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/release.jks --ks-pass pass:123456 --ks-key-alias pixez --key-pass pass:123456 --out pixez-cealer-android.apk /tmp/aligned.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
