@@ -87,6 +87,22 @@ class MainActivity : FlutterActivity() {
     private val safFolderLock = Any()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        io.flutter.plugin.common.MethodChannel(
+    flutterEngine.dartExecutor.binaryMessenger,
+    "pixez/ios_share").setMethodCallHandler { call, result ->
+    if (call.method == "openEoReader") {
+        val port = call.argument<Int>("port") ?: 0
+        val intent = android.content.Intent(
+            android.content.Intent.ACTION_VIEW,
+            android.net.Uri.parse("eoreader://pull?port=$port")
+        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        result.success(true)
+        } else 
+            {
+                result.notImplemented()
+            }
+        }
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(DeepLinkPlugin())
         sharedPreferences =
