@@ -3,6 +3,8 @@ import Flutter
 import MobileCoreServices
 import Photos
 import WidgetKit
+import WebKit
+import Network
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -17,6 +19,28 @@ import WidgetKit
             binaryMessenger: engineBridge.applicationRegistrar.messenger()
         )
         shareChannel.setMethodCallHandler { [weak self] call, result in
+            if call.method == "openCealerLogin",
+               let args = call.arguments as? [String: Any],
+               let port = args["port"] as? Int,
+               let urlStr = args["url"] as? String {
+                if #available(iOS 17.0, *) {
+                    DispatchQueue.main.async {
+                        guard let presenter = self?.visibleViewController() else {
+                            result(nil)
+                            return
+                        }
+                        let vc = CealerLoginVC(port: port, urlString: urlStr) { callbackUrl in
+                            result(callbackUrl)
+                        }
+                        vc.modalPresentationStyle = .fullScreen
+                        presenter.present(vc, animated: true)
+                    }
+                } else {
+                    result(FlutterError(code: "UNSUPPORTED", message: "Requires iOS 17+", details: nil))
+                }
+                return
+            }
+
             if call.method == "openEoReader",
                let args = call.arguments as? [String: Any],
                let port = args["port"] as? Int,
@@ -117,9 +141,9 @@ import WidgetKit
     
     @objc private func saveImage(image: UIImage, didFinishSavingWithError error: NSError?, contextInfo: AnyObject) {
         var showMessage = ""
-        if error != nil{
+        if error != nil {
             showMessage = "保存失败"
-        }else{
+        } else {
             showMessage = "保存成功"
         }
         print("encode result: \(showMessage)")
@@ -141,19 +165,16 @@ import WidgetKit
         } catch let error as NSError {
             print("get file path error: \(error)")
         }
-        return filePaths;
+        return filePaths
     }
     
-    func saveImageInAlbum(albumName: String = "",gifPath:String) {
+    func saveImageInAlbum(albumName: String = "", gifPath: String) {
         var assetAlbum: PHAssetCollection?
         if albumName.isEmpty {
-            let list = PHAssetCollection
-                .fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary,
-                                       options: nil)
+            let list = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil)
             assetAlbum = list[0]
         } else {
-            let list = PHAssetCollection
-                .fetchAssetCollections(with: .album, subtype: .any, options: nil)
+            let list = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
             list.enumerateObjects({ (album, index, stop) in
                 let assetCollection = album
                 if albumName == assetCollection.localizedTitle {
@@ -163,10 +184,9 @@ import WidgetKit
             })
             if assetAlbum == nil {
                 PHPhotoLibrary.shared().performChanges({
-                    PHAssetCollectionChangeRequest
-                        .creationRequestForAssetCollection(withTitle: albumName)
+                    PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName)
                 }, completionHandler: { (isSuccess, error) in
-                    self.saveImageInAlbum(albumName: albumName,gifPath: gifPath)
+                    self.saveImageInAlbum(albumName: albumName, gifPath: gifPath)
                 })
                 return
             }
@@ -182,57 +202,50 @@ import WidgetKit
         }) { (isSuccess: Bool, error: Error?) in
             if isSuccess {
                 DispatchQueue.main.async {
-                    let alertController = UIAlertController(title: "encode success", message: nil, preferredStyle: UIAlertController.Style.alert)
+                    let alertController = UIAlertController(title: "encode success", message: nil, preferredStyle: .alert)
                     self.visibleViewController()?.present(alertController, animated: true, completion: nil)
                     DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1) {
                         alertController.dismiss(animated: true, completion: nil)
                     }
                 }
-                print("Your image was successfully saved")
-            } else{
+            } else {
                 print(error!.localizedDescription)
             }
         }
     }
     
-    private func receiveBatteryLevel(result: FlutterResult,path:String,delay:Int) {
+    private func receiveBatteryLevel(result: FlutterResult, path: String, delay: Int) {
         let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)
-        let gifPath = docs[0] as String + "/"+String(Int(Date.init().timeIntervalSince1970)) + ".gif"
+        let gifPath = docs[0] as String + "/" + String(Int(Date.init().timeIntervalSince1970)) + ".gif"
         var paths = getAllFilePath(path)
-        paths = paths?.sorted{$0.localizedStandardCompare($1) == .orderedAscending}
+        paths = paths?.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         let imageArray: NSMutableArray = NSMutableArray()
         for i in paths! {
-            print(i)
             let image = UIImage.init(named: i)
             if image != nil {
                 imageArray.add(image!)
             }
         }
-        let ok = saveGifToDocument(imageArray: imageArray, gifPath,delay: delay)
-        if(ok){
+        let ok = saveGifToDocument(imageArray: imageArray, gifPath, delay: delay)
+        if ok {
             saveImageInAlbum(albumName: "pxez", gifPath: gifPath)
         }
         result(Int(1))
     }
     
-    func saveGifToDocument(imageArray images: NSArray, _ gifPath: String,delay:Int) -> Bool {
-        guard images.count > 0 &&
-                gifPath.utf8CString.count > 0 else {
-            return false
-        }
+    func saveGifToDocument(imageArray images: NSArray, _ gifPath: String, delay: Int) -> Bool {
+        guard images.count > 0 && gifPath.utf8CString.count > 0 else { return false }
         let url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, gifPath as CFString, .cfurlposixPathStyle, false)
         let destion = CGImageDestinationCreateWithURL(url!, kUTTypeGIF, images.count, nil)
-        let adelay = Float(delay)/Float(1000)
-        print("delay time\(adelay)")
-        let delayTime = [kCGImagePropertyGIFUnclampedDelayTime as String:adelay]
-        let destDic = [kCGImagePropertyGIFDictionary as String:delayTime]
-        let gifPropertiesDic:NSMutableDictionary = NSMutableDictionary()
+        let adelay = Float(delay) / Float(1000)
+        let delayTime = [kCGImagePropertyGIFUnclampedDelayTime as String: adelay]
+        let destDic = [kCGImagePropertyGIFDictionary as String: delayTime]
+        let gifPropertiesDic: NSMutableDictionary = NSMutableDictionary()
         gifPropertiesDic.setValue(0, forKey: kCGImagePropertyGIFLoopCount as String)
-        let gifDictionaryDestDic = [kCGImagePropertyGIFDictionary as String:gifPropertiesDic]
-        CGImageDestinationSetProperties(destion!,gifDictionaryDestDic as CFDictionary?);
+        let gifDictionaryDestDic = [kCGImagePropertyGIFDictionary as String: gifPropertiesDic]
+        CGImageDestinationSetProperties(destion!, gifDictionaryDestDic as CFDictionary?)
         for image in images {
             CGImageDestinationAddImage(destion!, (image as! UIImage).cgImage!, destDic as CFDictionary)
-            print("kkkkkkkk\(images.count)")
         }
         return CGImageDestinationFinalize(destion!)
     }
@@ -256,5 +269,78 @@ import WidgetKit
             return visibleViewController(from: presentedViewController)
         }
         return viewController
+    }
+}
+
+@available(iOS 17.0, *)
+class CealerLoginVC: UIViewController, WKNavigationDelegate {
+    private let port: Int
+    private let urlString: String
+    private let completion: (String?) -> Void
+    private var completed = false
+
+    init(port: Int, urlString: String, completion: @escaping (String?) -> Void) {
+        self.port = port
+        self.urlString = urlString
+        self.completion = completion
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+
+        let config = WKWebViewConfiguration()
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        if let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) {
+            let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: nwPort)
+            dataStore.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: endpoint)]
+        }
+        config.websiteDataStore = dataStore
+
+        let webView = WKWebView(frame: view.bounds, configuration: config)
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.navigationDelegate = self
+        view.addSubview(webView)
+
+        let closeBtn = UIButton(type: .system)
+        closeBtn.setTitle("关闭", for: .normal)
+        closeBtn.frame = CGRect(x: 16, y: 44, width: 60, height: 36)
+        closeBtn.addTarget(self, action: #selector(handleClose), for: .touchUpInside)
+        view.addSubview(closeBtn)
+
+        if let url = URL(string: urlString) {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    @objc private func handleClose() {
+        finish(with: nil)
+    }
+
+    private func finish(with value: String?) {
+        guard !completed else { return }
+        completed = true
+        dismiss(animated: true) { self.completion(value) }
+    }
+
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let url = navigationAction.request.url, url.scheme == "pixiv" {
+            decisionHandler(.cancel)
+            finish(with: url.absoluteString)
+            return
+        }
+        decisionHandler(.allow)
     }
 }
