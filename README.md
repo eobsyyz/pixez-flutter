@@ -8,6 +8,8 @@
 使用 Flutter 编写的 pixiv 第三方客户端。
 
 同样支持中国大陆地区直连。
+eo修改处:引用了SpaceTimee/Cealing-Host 拉取实时直连 IP，可以直接进行登录？
+并增加了配合eo_Reader进行android以及Ios端的下载，独立沙盒下载地址
 
 🎵 Mili - In Hell We Live, Lament 🎵 
 
