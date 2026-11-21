@@ -1,19 +1,60 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'package:flutter/services.dart';
+import 'package:pixez/er/hoster.dart';
 
 class CealerLoginProxy {
   static ServerSocket? _server;
   static int _port = 0;
 
-  // Pixiv Cloudflare 边缘节点 (accounts.pixiv.net / app-api.pixiv.net / www.pixiv.net)
-  static const String _cfPixivIp = '104.18.42.239';
-  static const String _pximgIp = '210.140.139.133';
+  static String _bestCfIp = '104.18.42.239';
+  static String _bestPximgIp = '210.140.139.133';
+
+  static final List<String> _cfCandidates = [
+    '104.18.42.239',
+    '172.64.145.17',
+    '104.18.30.199',
+    '172.64.157.57',
+  ];
+
+  static bool _isIp(String s) => RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(s);
+
+  static Future<String> _pickFastestIp(List<String> candidates, String fallback) async {
+    final completer = Completer<String>();
+    int remaining = candidates.length;
+    for (final ip in candidates) {
+      Socket.connect(ip, 443, timeout: Duration(seconds: 3)).then((sock) {
+        sock.destroy();
+        if (!completer.isCompleted) completer.complete(ip);
+      }).catchError((_) {
+        remaining--;
+        if (remaining <= 0 && !completer.isCompleted) {
+          completer.complete(fallback);
+        }
+      });
+    }
+    return completer.future;
+  }
 
   static Future<int> start() async {
     if (_server != null) return _port;
+
+    final hosterImg = Hoster.iPximgNet();
+    final pximgCandidates = <String>[
+      if (_isIp(hosterImg)) hosterImg,
+      '210.140.139.133',
+      '210.140.139.136',
+      '210.140.139.130',
+    ];
+
+    final picked = await Future.wait([
+      _pickFastestIp(_cfCandidates, _cfCandidates.first),
+      _pickFastestIp(pximgCandidates, '210.140.139.133'),
+    ]);
+    _bestCfIp = picked[0];
+    _bestPximgIp = picked[1];
+
     _server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     _port = _server!.port;
     _server!.listen((Socket client) {
@@ -28,29 +69,46 @@ class CealerLoginProxy {
     _port = 0;
   }
 
-  static Future<void> _sendFragmentedClientHello(Socket upstream, List<int> data) async {
-    // 识别 TLS Handshake (0x16) 记录，按 20 字节进行 TLS 记录层分片绕过 SNI 嗅探
-    if (data.length > 25 && data[0] == 0x16 && data[1] == 0x03) {
+  static int _indexOfBytes(List<int> haystack, List<int> needle) {
+    if (needle.isEmpty || haystack.length < needle.length) return -1;
+    for (int i = 0; i <= haystack.length - needle.length; i++) {
+      bool ok = true;
+      for (int j = 0; j < needle.length; j++) {
+        if (haystack[i + j] != needle[j]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return i;
+    }
+    return -1;
+  }
+
+  static Future<void> _sendTwoPartClientHello(Socket upstream, List<int> data) async {
+    if (data.length >= 5 && data[0] == 0x16 && data[1] == 0x03) {
       final recLen = (data[3] << 8) | data[4];
-      if (data.length >= 5 + recLen && recLen > 20) {
+      if (data.length >= 5 + recLen && recLen > 10) {
         final payload = data.sublist(5, 5 + recLen);
         final tail = data.sublist(5 + recLen);
-        const chunkSize = 20;
-        for (int offset = 0; offset < payload.length; offset += chunkSize) {
-          final end = min(offset + chunkSize, payload.length);
-          final slice = payload.sublist(offset, end);
-          final record = <int>[
-            0x16,
-            0x03,
-            0x01,
-            (slice.length >> 8) & 0xff,
-            slice.length & 0xff,
-            ...slice,
-          ];
-          upstream.add(record);
-          await upstream.flush();
-          await Future.delayed(Duration(milliseconds: 5));
+
+        int splitAt = payload.length ~/ 2;
+        for (final kw in ['pixiv', 'pximg', 'fanbox']) {
+          final pos = _indexOfBytes(payload, ascii.encode(kw));
+          if (pos > 0 && pos + 2 < payload.length) {
+            splitAt = pos + 2;
+            break;
+          }
         }
+
+        final part1 = payload.sublist(0, splitAt);
+        final part2 = payload.sublist(splitAt);
+
+        upstream.add(<int>[0x16, 0x03, 0x01, (part1.length >> 8) & 0xff, part1.length & 0xff, ...part1]);
+        await upstream.flush();
+        await Future.delayed(Duration(milliseconds: 10));
+        upstream.add(<int>[0x16, 0x03, 0x01, (part2.length >> 8) & 0xff, part2.length & 0xff, ...part2]);
+        await upstream.flush();
+
         if (tail.isNotEmpty) {
           upstream.add(tail);
           await upstream.flush();
@@ -67,7 +125,7 @@ class CealerLoginProxy {
       final headerBytes = <int>[];
       final completer = Completer<void>();
       late StreamSubscription<List<int>> sub;
-      final remaining = <int>[];
+      final helloBuf = <int>[];
 
       sub = client.listen((chunk) {
         if (!completer.isCompleted) {
@@ -76,7 +134,7 @@ class CealerLoginProxy {
           final idx = text.indexOf('\r\n\r\n');
           if (idx != -1) {
             if (headerBytes.length > idx + 4) {
-              remaining.addAll(headerBytes.sublist(idx + 4));
+              helloBuf.addAll(headerBytes.sublist(idx + 4));
             }
             sub.pause();
             completer.complete();
@@ -101,14 +159,14 @@ class CealerLoginProxy {
       final host = targetParts[0].toLowerCase();
       final port = targetParts.length > 1 ? int.tryParse(targetParts[1]) ?? 443 : 443;
 
-      bool needFragment = false;
+      bool needSplit = false;
       String connectHost = host;
       if (host == 'pixiv.net' || host.endsWith('.pixiv.net') || host.endsWith('.fanbox.cc')) {
-        connectHost = _cfPixivIp;
-        needFragment = true;
+        connectHost = _bestCfIp;
+        needSplit = true;
       } else if (host == 'pximg.net' || host.endsWith('.pximg.net')) {
-        connectHost = _pximgIp;
-        needFragment = true;
+        connectHost = _bestPximgIp;
+        needSplit = true;
       }
 
       final upstream = await Socket.connect(connectHost, port, timeout: Duration(seconds: 10));
@@ -117,23 +175,41 @@ class CealerLoginProxy {
       client.add(ascii.encode('HTTP/1.1 200 Connection Established\r\n\r\n'));
       await client.flush();
 
-      bool firstPacketSent = false;
-      if (remaining.isNotEmpty) {
-        firstPacketSent = true;
-        if (needFragment) {
-          await _sendFragmentedClientHello(upstream, remaining);
+      bool helloDone = !needSplit;
+      Future<void> processHelloIfReady() async {
+        if (helloDone || helloBuf.isEmpty) return;
+        if (helloBuf[0] != 0x16) {
+          helloDone = true;
+          upstream.add(List<int>.from(helloBuf));
+          helloBuf.clear();
+          return;
+        }
+        if (helloBuf.length < 5) return;
+        final expectedTotal = 5 + ((helloBuf[3] << 8) | helloBuf[4]);
+        if (helloBuf.length >= expectedTotal || expectedTotal > 16384) {
+          helloDone = true;
+          final fullHello = List<int>.from(helloBuf);
+          helloBuf.clear();
+          sub.pause();
+          await _sendTwoPartClientHello(upstream, fullHello);
+          sub.resume();
+        }
+      }
+
+      if (helloBuf.isNotEmpty) {
+        if (helloDone) {
+          upstream.add(List<int>.from(helloBuf));
+          helloBuf.clear();
         } else {
-          upstream.add(remaining);
+          await processHelloIfReady();
         }
       }
 
       sub.onData((data) async {
         try {
-          if (!firstPacketSent && needFragment) {
-            firstPacketSent = true;
-            sub.pause();
-            await _sendFragmentedClientHello(upstream, data);
-            sub.resume();
+          if (!helloDone) {
+            helloBuf.addAll(data);
+            await processHelloIfReady();
           } else {
             upstream.add(data);
           }
