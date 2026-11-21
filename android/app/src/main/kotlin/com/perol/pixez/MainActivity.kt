@@ -87,24 +87,8 @@ class MainActivity : FlutterActivity() {
     private val safFolderLock = Any()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        EoNativeBridge.register(this, flutterEngine)
-        io.flutter.plugin.common.MethodChannel(
-    flutterEngine.dartExecutor.binaryMessenger,
-    "pixez/ios_share").setMethodCallHandler { call, result ->
-    if (call.method == "openEoReader") {
-        val port = call.argument<Int>("port") ?: 0
-        val intent = android.content.Intent(
-            android.content.Intent.ACTION_VIEW,
-            android.net.Uri.parse("eoreader://pull?port=$port")
-        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
-        result.success(true)
-        } else 
-            {
-                result.notImplemented()
-            }
-        }
         super.configureFlutterEngine(flutterEngine)
+        EoNativeBridge.register(this, flutterEngine)
         flutterEngine.plugins.add(DeepLinkPlugin())
         sharedPreferences =
             this.getSharedPreferences(SHARED_PREFERENCES_NAME, Context.MODE_PRIVATE)
@@ -154,7 +138,7 @@ class MainActivity : FlutterActivity() {
                     if (clearOld == null)
                         clearOld = false
                     if (savingPools.contains(name))
-                        return@setMethodCallHandler;
+                        return@setMethodCallHandler
                     savingPools.add(name)
                     lifecycleScope.launch {
                         try {
@@ -251,7 +235,7 @@ class MainActivity : FlutterActivity() {
                     if (clearOld == null)
                         clearOld = false
                     if (savingPools.contains(name))
-                        return@setMethodCallHandler;
+                        return@setMethodCallHandler
                     savingPools.add(name)
                     lifecycleScope.launch {
                         try {
