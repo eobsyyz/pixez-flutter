@@ -22,6 +22,7 @@ import 'package:pixez/custom_tab_plugin.dart';
 import 'package:pixez/er/leader.dart';
 import 'package:pixez/i18n.dart';
 import 'package:pixez/main.dart';
+import 'package:pixez/net/cealer_login_proxy.dart';
 import 'package:pixez/network/oauth_client.dart';
 import 'package:pixez/page/about/about_page.dart';
 import 'package:pixez/page/hello/setting/setting_quality_page.dart';
@@ -165,10 +166,14 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   _launch(url) async {
-    if (Platform.isIOS) {
-      final result = await Leader.push(context, WebViewPage(url: url));
-      if (result == "OK") {
-        Leader.pushUntilHome(context);
+    if (Platform.isIOS || Platform.isAndroid) {
+      try {
+        final callbackUrl = await CealerLoginProxy.openDirectAuthWebView(url);
+        if (callbackUrl != null && callbackUrl.startsWith('pixiv://')) {
+          await launchUrlString(callbackUrl);
+        }
+      } catch (e) {
+        BotToast.showText(text: e.toString());
       }
       return;
     }
@@ -181,7 +186,6 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
     if (userSetting.oauthNetworkMode.usesCompatibleConnection) {
-      // await WeissServer.listener();
       await WeissPlugin.start();
       await WeissPlugin.proxy();
       Leader.push(context, WebViewPage(url: url));
