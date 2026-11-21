@@ -87,6 +87,7 @@ class MainActivity : FlutterActivity() {
     private val safFolderLock = Any()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        EoNativeBridge.register(this, flutterEngine)
         io.flutter.plugin.common.MethodChannel(
     flutterEngine.dartExecutor.binaryMessenger,
     "pixez/ios_share").setMethodCallHandler { call, result ->
