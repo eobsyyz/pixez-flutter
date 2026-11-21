@@ -123,8 +123,9 @@ abstract class _SaveStoreBase with Store {
   }
 
   void listenBehavior(SaveStream stream) {
-    if (Platform.isIOS && ctx != null) {
-      EoVaultHelper.ensureFloatingButton(ctx!);
+    if ((Platform.isIOS || Platform.isAndroid) && ctx != null) 
+    {
+      EoVaultHelper.ensureFloatingButton(ctx!); 
     }
     switch (stream.state) {
       case SaveState.SUCCESS:
@@ -371,9 +372,10 @@ abstract class _SaveStoreBase with Store {
     Illusts illusts,
     String fileName,
   ) async {
-    if (Platform.isIOS) {
+    if (Platform.isIOS || Platform.isAndroid)
+    { 
       await EoVaultHelper.handleSave(uint8list, illusts, fileName);
-      return;
+      return; 
     }
     saveToGalleryWithUser(
       uint8list,
@@ -390,7 +392,8 @@ abstract class _SaveStoreBase with Store {
       saveImage(illusts);
     } else {
       final selectedCount = indexs.where((e) => e).length;
-      if (Platform.isIOS && selectedCount > 0) {
+      if ((Platform.isIOS || Platform.isAndroid) && selectedCount > 0)
+      { 
         EoVaultHelper.prepareExpected(illusts, customCount: selectedCount);
       }
       for (var i = 0; i < indexs.length; i++) {
@@ -449,8 +452,9 @@ abstract class _SaveStoreBase with Store {
     int? index,
     bool redo = false,
   }) async {
-    if (Platform.isIOS) {
-      EoVaultHelper.prepareExpected(illusts, singleIndex: index);
+    if (Platform.isIOS || Platform.isAndroid)
+    { 
+      EoVaultHelper.prepareExpected(illusts, singleIndex: index); 
     }
     String memType;
     if (illusts.pageCount == 1) {
